@@ -85,6 +85,32 @@ static void queue_fifo_wraparound(bq_backend b)
     bq_destroy(q);
 }
 
+static void queue_snapshot(bq_backend b)
+{
+    bqueue *q = bq_create(3, sizeof(int), b);
+    int v, out[3];
+    size_t head = 99;
+
+    CHECK(bq_snapshot(q, out, 3, &head) == 0 && head == 0);
+    for (int i = 0; i < 3; i++)
+        bq_push(q, &i);
+    bq_pop(q, &v);
+    bq_pop(q, &v);
+    for (int i = 3; i < 5; i++) /* wraps around */
+        bq_push(q, &i);
+    CHECK(bq_snapshot(q, out, 3, &head) == 3 && head == 2);
+    for (int i = 0; i < 3; i++)
+        CHECK(out[i] == i + 2);
+    CHECK(bq_snapshot(q, out, 1, NULL) == 1 && out[0] == 2);
+    CHECK(bq_snapshot(NULL, out, 3, NULL) == 0);
+    CHECK(bq_snapshot(q, NULL, 3, NULL) == 0);
+
+    bq_close(q); /* nothing was removed */
+    for (int i = 2; i < 5; i++)
+        CHECK(bq_pop(q, &v) == BQ_OK && v == i);
+    bq_destroy(q);
+}
+
 static void queue_struct_items(bq_backend b)
 {
     struct item {
@@ -507,6 +533,41 @@ static void pool_create_destroy_loop(void)
     }
 }
 
+static void pool_snapshot(void)
+{
+    const bq_backend backends[] = {BQ_CONDVAR, BQ_SEMAPHORE};
+    CHECK(tp_create_with(1, 1, (bq_backend)99) == NULL);
+
+    for (int b = 0; b < 2; b++) {
+        gate g;
+        void *args[8];
+        size_t head = 99;
+        sem_init(&g.started, 0, 0);
+        sem_init(&g.go, 0, 0);
+        atomic_store(&counter, 0);
+
+        threadpool *tp = tp_create_with(1, 4, backends[b]);
+        CHECK(tp_snapshot(tp, args, 8, &head) == 0);
+        tp_submit(tp, gate_task, &g);
+        sem_wait(&g.started); /* the gate task has left slot 0 */
+        for (intptr_t i = 1; i <= 3; i++)
+            tp_submit(tp, count_task, (void *)i);
+        CHECK(tp_snapshot(tp, args, 8, &head) == 3 && head == 1);
+        for (intptr_t i = 1; i <= 3; i++)
+            CHECK(args[i - 1] == (void *)i);
+        CHECK(tp_snapshot(tp, args, 2, NULL) == 2);
+        CHECK(tp_snapshot(NULL, args, 8, NULL) == 0);
+        CHECK(tp_snapshot(tp, NULL, 8, NULL) == 0);
+
+        sem_post(&g.go);
+        tp_wait(tp);
+        CHECK(atomic_load(&counter) == 3);
+        tp_destroy(tp);
+        sem_destroy(&g.started);
+        sem_destroy(&g.go);
+    }
+}
+
 /* ================================ runner ================================= */
 
 static void report(const char *name, const char *variant, int failures_before)
@@ -550,6 +611,7 @@ int main(void)
     RUN_QUEUE(queue_close_wakes_all);
     RUN_QUEUE(queue_close_drains);
     RUN_QUEUE(queue_mpmc_stress);
+    RUN_QUEUE(queue_snapshot);
 
     RUN(pool_invalid);
     RUN(pool_runs_each_task_once);
@@ -562,6 +624,7 @@ int main(void)
     RUN(pool_subtasks);
     RUN(pool_rejects_during_destroy);
     RUN(pool_create_destroy_loop);
+    RUN(pool_snapshot);
 
     printf("\n%d tests, %d failed checks\n", tests_run, atomic_load(&failures));
     return atomic_load(&failures) != 0;

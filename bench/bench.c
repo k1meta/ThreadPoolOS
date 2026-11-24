@@ -8,31 +8,14 @@
  *   queue                    queue capacity
  */
 #include "bqueue.h"
+#include "strategies.h"
 #include "threadpool.h"
 
-#include <errno.h>
 #include <pthread.h>
-#include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <time.h>
 
 #define REPS 5 /* plus one discarded warm-up */
-#define QUEUE_CAPACITY 1024
 #define LEN(a) (sizeof(a) / sizeof((a)[0]))
-
-static double now(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec + ts.tv_nsec * 1e-9;
-}
-
-static void die(const char *what)
-{
-    fprintf(stderr, "bench: %s failed\n", what);
-    exit(1);
-}
 
 static void row(const char *experiment, const char *strategy, long param,
                 size_t threads, size_t tasks, int rep, double seconds)
@@ -42,117 +25,6 @@ static void row(const char *experiment, const char *strategy, long param,
     printf("%s,%s,%ld,%zu,%zu,%d,%.6f\n", experiment, strategy, param, threads,
            tasks, rep, seconds);
     fflush(stdout);
-}
-
-/* ---- task bodies ------------------------------------------------------- */
-
-static double iterations_per_us;
-static long work_iterations, sleep_us;
-
-/*
- * A fixed amount of arithmetic, not "spin until the clock says so". If tasks
- * compete for cores they must take longer, as real work would.
- */
-static void burn(long iterations)
-{
-    volatile uint32_t sink;
-    uint32_t x = 1;
-    for (long i = 0; i < iterations; i++)
-        x = x * 1664525u + 1013904223u + (x >> 16);
-    sink = x;
-    (void)sink;
-}
-
-static void cpu_task(void *arg)
-{
-    (void)arg;
-    burn(work_iterations);
-}
-
-static void sleep_task(void *arg)
-{
-    (void)arg;
-    struct timespec ts = {sleep_us / 1000000, (sleep_us % 1000000) * 1000};
-    nanosleep(&ts, NULL);
-}
-
-static void calibrate(void)
-{
-    const long n = 200000000;
-    burn(n); /* let the CPU reach its running frequency */
-    double best = 1e9;
-    for (int i = 0; i < 3; i++) {
-        double t = now();
-        burn(n);
-        t = now() - t;
-        if (t < best)
-            best = t;
-    }
-    iterations_per_us = n / (best * 1e6);
-    fprintf(stderr, "calibration: %.0f iterations per us\n", iterations_per_us);
-}
-
-static void set_work(long us)
-{
-    work_iterations = (long)(us * iterations_per_us);
-}
-
-/* ---- strategies: run `tasks` copies of fn, return elapsed seconds -------- */
-
-static double run_sequential(tp_task_fn fn, size_t tasks)
-{
-    double t = now();
-    for (size_t i = 0; i < tasks; i++)
-        fn(NULL);
-    return now() - t;
-}
-
-static void *thread_main(void *arg)
-{
-    (*(tp_task_fn *)arg)(NULL);
-    return NULL;
-}
-
-static double run_thread_per_task(tp_task_fn fn, size_t tasks)
-{
-    pthread_t *threads = malloc(tasks * sizeof *threads);
-    size_t joined = 0, hit_limit = 0;
-    if (!threads)
-        die("malloc");
-
-    double t = now();
-    for (size_t i = 0; i < tasks; i++) {
-        int rc;
-        while ((rc = pthread_create(&threads[i], NULL, thread_main, &fn)) == EAGAIN &&
-               joined < i) {
-            pthread_join(threads[joined++], NULL); /* free a slot, retry */
-            hit_limit++;
-        }
-        if (rc != 0)
-            die("pthread_create");
-    }
-    while (joined < tasks)
-        pthread_join(threads[joined++], NULL);
-    t = now() - t;
-
-    free(threads);
-    if (hit_limit)
-        fprintf(stderr, "note: thread limit hit %zu times\n", hit_limit);
-    return t;
-}
-
-/* Includes creating and destroying the pool, so the pool pays for its own
- * threads just as thread-per-task does. */
-static double run_pool(tp_task_fn fn, size_t tasks, size_t nthreads)
-{
-    double t = now();
-    threadpool *tp = tp_create(nthreads, QUEUE_CAPACITY);
-    if (!tp)
-        die("tp_create");
-    for (size_t i = 0; i < tasks; i++)
-        tp_submit(tp, fn, NULL);
-    tp_destroy(tp);
-    return now() - t;
 }
 
 /* ---- experiments -------------------------------------------------------- */

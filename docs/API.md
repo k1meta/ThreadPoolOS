@@ -23,6 +23,10 @@ Returns the pool, or `NULL` if an argument is 0, memory runs out, or a thread
 cannot be created. On failure nothing is leaked: workers that did start are
 stopped and joined.
 
+### `threadpool *tp_create_with(size_t nthreads, size_t queue_capacity, bq_backend backend)`
+
+Same, with a chosen queue backend. `tp_create` uses `BQ_CONDVAR`.
+
 ### `int tp_submit(threadpool *tp, tp_task_fn fn, void *arg)`
 
 Queues the call `fn(arg)`, where `tp_task_fn` is `void (*)(void *)`. Blocks while
@@ -47,6 +51,17 @@ Same, but returns `TP_FULL` at once instead of blocking.
 Blocks until no submitted task is queued or running, including tasks submitted
 by other tasks. The pool can be used again afterwards. Several threads may wait
 at the same time. Everything the tasks wrote is visible after it returns.
+
+### `size_t tp_snapshot(threadpool *tp, void **args, size_t max, size_t *head)`
+
+For monitoring. Copies the `arg` of up to `max` queued tasks into `args`, oldest
+first, and returns how many. `*head` receives the queue slot of the oldest one;
+`head` may be `NULL`. Running tasks are not included. Returns 0 for a `NULL` `tp` or
+`args`, a `max` of 0, or if memory runs out.
+
+The tasks keep moving, so the answer may be out of date at once. A worker may
+already have run a task and freed its `arg`: only follow these pointers if that
+memory outlives the pool. The dashboard passes task numbers instead of pointers.
 
 ### `void tp_destroy(threadpool *tp)`
 
@@ -129,6 +144,12 @@ while (bq_pop(q, &item) == BQ_OK)
 The `try` functions may wait briefly for the internal mutex. With the semaphore
 backend and other threads active, they can report full or empty for an instant
 while another thread is between updating the queue and posting the semaphore.
+
+### `size_t bq_snapshot(bqueue *q, void *out, size_t max, size_t *head)`
+
+Copies up to `max` queued items into `out`, oldest first, without removing them, and
+returns how many. `*head` receives the buffer slot of the oldest item; `head` may be
+`NULL`. Returns 0 for a `NULL` `q` or `out`. Holds the mutex while copying.
 
 ### `void bq_close(bqueue *q)`
 

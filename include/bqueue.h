@@ -39,6 +39,11 @@ int bq_pop(bqueue *q, void *out);
 int bq_try_push(bqueue *q, const void *item);
 int bq_try_pop(bqueue *q, void *out);
 
+/* Copy up to max queued items into out, oldest first, without removing them.
+ * *head receives the buffer slot of the oldest item (head may be NULL). Returns
+ * the number copied. For monitoring: the answer may be stale on return. */
+size_t bq_snapshot(bqueue *q, void *out, size_t max, size_t *head);
+
 /*
  * Refuse further pushes and wake every blocked thread. Items already queued
  * can still be popped. Calling it again has no effect.
