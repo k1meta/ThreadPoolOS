@@ -1,0 +1,775 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thread pool dashboard</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  color-scheme: light;
+  --plane: #f9f9f7; --surface: #fcfcfb; --raised: #ffffff;
+  --ink: #0b0b0b; --ink2: #52514e; --muted: #6f6d68; --grid: #e1e0d9; --axis: #c3c2b7;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s1-wash: #dbe9fa;
+  --good: #0ca30c; --warn: #fab219; --warn-wash: #fdf0cf; --bad: #d03b3b; --bad-wash: #fae0e0;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plane: #0d0d0d; --surface: #1a1a19; --raised: #242423;
+  --ink: #f0efec; --ink2: #c3c2b7; --muted: #96948e; --grid: #2c2c2a; --axis: #4a4a46;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s1-wash: #17314f;
+  --warn-wash: #3d3110; --bad-wash: #461d1d;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--plane); color: var(--ink);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+h2 { font-size: 13px; margin: 0 0 10px; color: var(--ink2); font-weight: 600; }
+h3 { font-size: 17px; margin: 0 0 2px; }
+p { margin: 0 0 8px; }
+code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; }
+[hidden] { display: none !important; }
+
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 12px 20px;
+  background: var(--surface); border-bottom: 1px solid var(--grid); position: sticky; top: 0; z-index: 5; }
+header h1 { font-size: 18px; margin: 0; }
+[role=tablist] { display: flex; gap: 4px; }
+[role=tab] { border-color: transparent; background: none; }
+[role=tab][aria-selected=true] { background: var(--s1-wash); font-weight: 600; }
+.spacer { flex: 1; }
+.pill { padding: 3px 12px; border-radius: 99px; border: 1px solid var(--axis); font-weight: 600; font-size: 13px; }
+.pill.running { border-color: var(--good); }
+.pill.running::before { content: "●  "; color: var(--good); }
+.pill.stopping, .pill.draining { background: var(--warn-wash); border-color: var(--warn); }
+.pill.lost { background: var(--bad-wash); border-color: var(--bad); }
+
+button, select, input { font: inherit; color: inherit; background: var(--raised);
+  border: 1px solid var(--axis); border-radius: 7px; padding: 5px 11px; }
+button { cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--s1); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { background: var(--s1); border-color: var(--s1); color: #fff; font-weight: 600; }
+button[aria-pressed=true] { background: var(--warn-wash); border-color: var(--warn); font-weight: 600; }
+:focus-visible { outline: 3px solid var(--s1); outline-offset: 2px; }
+input[type=number] { width: 84px; padding: 4px 8px; }
+label.f { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 7px; color: var(--ink2); }
+label.f select { max-width: 160px; }
+
+main { padding: 16px 20px 40px; max-width: 1720px; margin: 0 auto; }
+.card { background: var(--surface); border: 1px solid var(--grid); border-radius: 12px; padding: 14px 16px; min-width: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.live { display: grid; grid-template-columns: 268px minmax(0, 1fr); gap: 14px; align-items: start; }
+.stack { display: grid; gap: 14px; min-width: 0; }
+.buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.buttons.three { grid-template-columns: repeat(3, 1fr); }
+.wide { grid-column: 1 / -1; }
+.hint { color: var(--muted); font-size: 13px; }
+
+.pipeline { display: grid; grid-template-columns: minmax(150px, 1fr) 28px minmax(230px, 1.7fr) 28px minmax(210px, 1.3fr); gap: 8px; }
+.arrow { align-self: center; text-align: center; color: var(--muted); font-size: 22px; }
+.list { display: grid; gap: 7px; align-content: start; }
+.two { grid-template-columns: 1fr 1fr; }
+.box { display: block; width: 100%; text-align: left; padding: 7px 10px; border-left: 5px solid var(--axis); line-height: 1.3; min-width: 0; }
+.box b { font-size: 14px; }
+.box small { display: block; color: var(--ink2); font-size: 12px; overflow-wrap: anywhere; }
+.box.busy { border-left-color: var(--s1); background: var(--s1-wash); }
+.box.held { border-left-color: var(--warn); background: var(--warn-wash); }
+.box.blocked { border-left-color: var(--bad); background: var(--bad-wash); }
+.bar { height: 5px; border-radius: 3px; background: var(--grid); margin-top: 5px; overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: var(--s1); }
+.slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 6px; }
+.slot { padding: 2px 2px 4px; text-align: center; border: 1px dashed var(--axis); background: none; line-height: 1.25; min-height: 58px; }
+.slot.full { border: 1px solid var(--s1); background: var(--s1-wash); }
+.slot b { display: block; font-size: 14px; min-height: 18px; }
+.slot small { display: block; font-size: 11px; color: var(--muted); }
+.slot em { display: block; font-style: normal; font-weight: 700; font-size: 10px; min-height: 26px; line-height: 13px; }
+.selected { outline: 3px solid var(--s1); outline-offset: 1px; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(98px, 1fr)); gap: 10px; }
+.tile { padding: 4px 2px; }
+.tile span { display: block; font-size: 12px; color: var(--ink2); }
+.tile b { font-size: 22px; font-weight: 600; }
+canvas { display: block; width: 100%; }
+.key { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink2); margin-right: 14px; }
+.key i { width: 12px; height: 12px; border-radius: 3px; }
+.bottom { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 14px; }
+#log { height: 230px; overflow-y: auto; font: 13px/1.5 ui-monospace, Consolas, monospace; }
+#log div { display: flex; gap: 10px; border-bottom: 1px solid var(--grid); padding: 1px 0; }
+#log time { color: var(--muted); min-width: 62px; text-align: right; font-variant-numeric: tabular-nums; }
+#details dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; margin: 6px 0; }
+#details dt { color: var(--ink2); } #details dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(560px, 100%), 1fr)); gap: 14px; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { fill: var(--ink2); font-size: 12px; }
+svg .v { fill: var(--ink); font-weight: 600; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: right; padding: 4px 10px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--ink2); font-weight: 600; }
+summary { cursor: pointer; color: var(--ink2); margin-top: 8px; }
+.race { display: grid; grid-template-columns: 170px 1fr; gap: 14px 12px; align-items: center; margin: 18px 0 8px; }
+.race .track { display: flex; align-items: center; gap: 10px; min-height: 24px; }
+.race .track i { height: 24px; border-radius: 0 4px 4px 0; min-width: 2px; }
+.race small { color: var(--ink2); }
+#tlist { columns: 2 420px; list-style: none; padding: 0; margin: 14px 0; font: 14px/1.7 ui-monospace, Consolas, monospace; }
+#tlist .ok::before { content: "✓ "; color: var(--good); font-weight: 700; }
+#tlist .no::before { content: "✗ "; color: var(--bad); font-weight: 700; }
+#tip { position: fixed; pointer-events: none; z-index: 20; background: var(--raised); border: 1px solid var(--axis);
+  border-radius: 8px; padding: 6px 10px; font-size: 13px; box-shadow: 0 4px 14px rgb(0 0 0 / .18); white-space: pre-line; }
+#toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 30; background: var(--ink);
+  color: var(--plane); padding: 10px 18px; border-radius: 9px; max-width: 90vw; }
+@media (max-width: 1050px) { .live, .bottom { grid-template-columns: 1fr; } .pipeline { grid-template-columns: 1fr; } .arrow { transform: rotate(90deg); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Thread pool dashboard</h1>
+  <div role="tablist" aria-label="Views">
+    <button role="tab" id="tab-live" aria-controls="live" aria-selected="true">Live pool</button>
+    <button role="tab" id="tab-race" aria-controls="race" aria-selected="false">Benchmark race</button>
+    <button role="tab" id="tab-saved" aria-controls="saved" aria-selected="false">Saved results</button>
+    <button role="tab" id="tab-tests" aria-controls="tests" aria-selected="false">Tests</button>
+  </div>
+  <span class="spacer"></span>
+  <span class="pill" id="life" role="status">connecting</span>
+  <button id="theme">Dark</button>
+  <button id="quit" title="Ends the dashboard program">Quit</button>
+</header>
+
+<main>
+<!-- ========================= live pool ========================= -->
+<section id="live" role="tabpanel" aria-labelledby="tab-live" class="live">
+  <div class="stack">
+    <div class="card">
+      <h2>Scenarios</h2>
+      <div class="buttons" id="presets"></div>
+      <p class="hint" id="presetText" style="margin:9px 0 0">Each one restarts the pool with a suitable setup.</p>
+    </div>
+    <div class="card">
+      <h2>Submit tasks</h2>
+      <div class="buttons three">
+        <button data-add="1">+1</button><button data-add="10">+10</button><button data-add="50">+50</button>
+      </div>
+      <p style="margin:8px 0"></p>
+      <label class="f">Work <select id="cpu"><option value="1">CPU arithmetic</option><option value="0">Sleep (I/O)</option></select></label>
+      <label class="f">Length, ms <input type="number" id="ms" min="5" max="5000" value="400"></label>
+      <label class="f">Call <select id="try"><option value="0">tp_submit</option><option value="1">tp_try_submit</option></select></label>
+      <label class="f">Rate /s each <input type="number" id="rate" min="1" max="50" value="5"></label>
+      <button id="auto" class="wide" style="width:100%" aria-pressed="false">Submit continuously</button>
+    </div>
+    <div class="card">
+      <h2>Control</h2>
+      <div class="buttons">
+        <button id="pause" aria-pressed="false">Pause workers</button>
+        <button id="wait">tp_wait</button>
+        <button id="shutdown" class="wide">Shut down (tp_destroy)</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Pool setup</h2>
+      <label class="f">Workers <input type="number" id="workers" min="1" max="16" value="4"></label>
+      <label class="f">Queue capacity <input type="number" id="capacity" min="1" max="64" value="8"></label>
+      <label class="f">Producers <input type="number" id="producers" min="1" max="8" value="2"></label>
+      <label class="f">Queue uses <select id="backend"><option value="0">condvars</option><option value="1">semaphores</option></select></label>
+      <button id="restart" class="primary" style="width:100%">Start / restart</button>
+    </div>
+  </div>
+
+  <div class="stack">
+    <div class="card pipeline">
+      <div><h2>Producers <span id="toSubmit"></span></h2><div class="list" id="plist"></div></div>
+      <div class="arrow" aria-hidden="true">➜</div>
+      <div><h2>Bounded queue <span id="qcount"></span></h2><div class="slots" id="qlist"></div></div>
+      <div class="arrow" aria-hidden="true">➜</div>
+      <div><h2>Workers <span id="wcount"></span></h2><div class="list" id="wlist"></div></div>
+    </div>
+    <div class="card tiles" id="tiles"></div>
+    <div class="card">
+      <h2>Last 10 seconds: what each worker ran, and how full the queue was</h2>
+      <canvas id="gantt" role="img" aria-label="Timeline of tasks per worker. The event log lists the same tasks as text."></canvas>
+      <div style="margin-top:8px">
+        <span class="key"><i style="background:var(--s1)"></i>CPU task</span>
+        <span class="key"><i style="background:var(--s3)"></i>Sleeping task</span>
+        <span class="key"><i style="background:var(--s2)"></i>Queue fill</span>
+        <span class="hint">Click a task for details.</span>
+      </div>
+    </div>
+    <div class="bottom">
+      <div class="card"><h2>Event log</h2><div id="log" tabindex="0" aria-label="Event log"></div></div>
+      <div class="card" id="details"><h2>Details</h2><div id="detailBody"></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= race ========================= -->
+<section id="race" role="tabpanel" aria-labelledby="tab-race" hidden>
+  <div class="card">
+    <h3>Same work, three ways of running it</h3>
+    <p class="hint">Measured on this computer when you press Run. Shorter is better. Each task does a fixed amount of arithmetic.</p>
+    <div class="row">
+      <label>Tasks <input type="number" id="rTasks" min="1" max="10000" value="10000"></label>
+      <label>Work per task, µs <input type="number" id="rUs" min="0" max="100000" value="100"></label>
+      <label>Pool workers <input type="number" id="rWorkers" min="1" max="64" value="12"></label>
+      <button id="rRun" class="primary">Run</button>
+      <span class="spacer"></span>
+      <span class="hint">Try:</span>
+      <button data-race="10000,1">tiny, 1 µs</button>
+      <button data-race="10000,10">10 µs</button>
+      <button data-race="10000,100">100 µs</button>
+      <button data-race="2000,1000">1 ms</button>
+    </div>
+    <div class="race" id="rBars"></div>
+    <p id="rVerdict" role="status" style="font-size:17px;font-weight:600;min-height:26px"></p>
+  </div>
+  <div class="card" style="margin-top:14px"><h2>Runs so far</h2>
+    <table><thead><tr><th>Setup</th><th>Sequential</th><th>Thread per task</th><th>Pool</th><th>Pool vs sequential</th><th>Pool vs thread per task</th></tr></thead><tbody id="rHistory"></tbody></table>
+  </div>
+</section>
+
+<!-- ========================= saved ========================= -->
+<section id="saved" role="tabpanel" aria-labelledby="tab-saved" hidden>
+  <p class="hint">From <code>results/bench.csv</code>, the full benchmark: median of the repetitions. Method and discussion are in <code>docs/BENCHMARK.md</code>.</p>
+  <div class="charts" id="charts"></div>
+</section>
+
+<!-- ========================= tests ========================= -->
+<section id="tests" role="tabpanel" aria-labelledby="tab-tests" hidden>
+  <div class="card">
+    <h3>Unit and stress tests</h3>
+    <p class="hint">Runs <code>build/test</code>, the library tests of <code>make test</code>. Takes a few seconds.</p>
+    <div class="row"><button id="tRun" class="primary">Run tests</button><span class="pill" id="tBadge" role="status">not run yet</span></div>
+    <ul id="tlist"></ul>
+  </div>
+</section>
+</main>
+<div id="tip" hidden></div>
+<div id="toast" role="alert" hidden></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const ms = v => v >= 10000 ? (v / 1000).toFixed(1) + " s" : v >= 100 ? v.toFixed(0) + " ms" : v >= 0.1 ? v.toFixed(1) + " ms" : v === 0 ? "0 ms" : v.toFixed(3) + " ms";
+const setText = (e, t) => { if (e.textContent !== t) e.textContent = t; };
+const setClass = (e, c) => { if (e.className !== c) e.className = c; };
+const sleep = t => new Promise(r => setTimeout(r, t));
+
+let toastTimer;
+function toast(text) {
+  $("toast").textContent = text; $("toast").hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => $("toast").hidden = true, 4500);
+}
+function tip(e, text) {
+  const t = $("tip");
+  t.hidden = !text;
+  if (!text) return;
+  t.textContent = text;
+  t.style.left = Math.min(e.clientX + 14, innerWidth - t.offsetWidth - 8) + "px";
+  t.style.top = Math.min(e.clientY + 14, innerHeight - t.offsetHeight - 8) + "px";
+}
+
+let quitted = false;
+async function post(path, params = {}) {
+  try {
+    const r = await fetch("/api/" + path + "?" + new URLSearchParams(params), { method: "POST", headers: { "X-Dashboard": "1" } });
+    if (!r.ok) toast(await r.text());
+    return r.ok;
+  } catch { if (!quitted) toast("The dashboard program is not running."); return false; }
+}
+
+/* ---- header ---- */
+const tabs = ["live", "race", "saved", "tests"];
+function show(name) {
+  for (const t of tabs) {
+    $(t).hidden = t !== name;
+    $("tab-" + t).setAttribute("aria-selected", t === name);
+    $("tab-" + t).tabIndex = t === name ? 0 : -1;
+  }
+  if (name === "saved") drawSaved();
+}
+tabs.forEach((t, i) => {
+  $("tab-" + t).onclick = () => show(t);
+  $("tab-" + t).onkeydown = e => {
+    const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+    if (d) { const n = tabs[(i + d + tabs.length) % tabs.length]; show(n); $("tab-" + n).focus(); }
+  };
+});
+function setTheme(t) { document.documentElement.dataset.theme = t; $("theme").textContent = t === "dark" ? "Light" : "Dark"; }
+setTheme(localStorage.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+$("theme").onclick = () => { localStorage.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; setTheme(localStorage.theme); };
+$("quit").onclick = async () => {
+  quitted = await post("quit");
+  if (quitted) document.querySelector("main").replaceChildren(el("p", "", "The dashboard program has ended. You can close this page."));
+};
+
+/* ---- live pool: controls ---- */
+const num = id => { // a valid value, or null with the browser's own message
+  const e = $(id);
+  return e.reportValidity() && e.value !== "" ? Math.round(+e.value) : null;
+};
+function settings(auto) {
+  const v = { cpu: $("cpu").value, ms: num("ms"), try: $("try").value, auto: auto ? 1 : 0, rate: num("rate") };
+  return v.ms === null || v.rate === null ? null : v;
+}
+async function applySettings(auto = S && S.settings.auto) {
+  const v = settings(auto);
+  return v !== null && await post("set", v);
+}
+function applyConfig() {
+  const c = { workers: num("workers"), capacity: num("capacity"), producers: num("producers"), backend: $("backend").value };
+  return Object.values(c).includes(null) ? false : post("restart", c);
+}
+for (const id of ["cpu", "ms", "try", "rate"]) $(id).onchange = () => applySettings();
+for (const b of document.querySelectorAll("[data-add]")) b.onclick = () => post("add", { n: b.dataset.add });
+$("auto").onclick = () => applySettings(!S.settings.auto);
+$("pause").onclick = () => post("pause", { on: S.paused ? 0 : 1 });
+$("wait").onclick = () => post("wait");
+$("shutdown").onclick = () => post("shutdown");
+$("restart").onclick = applyConfig;
+
+const presets = [
+  { name: "Burst", c: [4, 32, 2], s: [1, 300, 0, 5], add: 40, text: "40 tasks at once. Watch the queue fill, then 4 workers empty it in FIFO order." },
+  { name: "Backpressure", c: [2, 4, 4], s: [1, 600, 0, 5], add: 30, text: "Producers outrun 2 workers. The queue stays full and tp_submit blocks the producers instead of using more memory." },
+  { name: "Rejections", c: [2, 4, 2], s: [1, 600, 1, 5], auto: 1, text: "Same overload with tp_try_submit: nobody blocks, tasks that do not fit are rejected with TP_FULL." },
+  { name: "Idle workers", c: [8, 16, 1], s: [1, 300, 0, 4], auto: 1, text: "More workers than work. Idle workers sleep inside bq_pop and use no CPU." },
+  { name: "Capacity 1", c: [4, 1, 4], s: [1, 150, 0, 8], auto: 1, text: "One slot: producers and workers must take turns on every single task." },
+  { name: "I/O-bound", c: [16, 32, 2], s: [0, 1500, 0, 5], add: 48, text: "Sleeping tasks hold a worker without using the CPU, so many more workers than cores make sense." },
+];
+let presetRun = 0;
+async function runPreset(p) {
+  const me = ++presetRun;
+  $("presetText").textContent = p.text;
+  [$("workers").value, $("capacity").value, $("producers").value] = p.c;
+  [$("cpu").value, $("ms").value, $("try").value, $("rate").value] = p.s;
+  if (S && S.settings.auto) await post("set", settings(false));
+  if (!await applyConfig()) return;
+  do { await sleep(120); if (me !== presetRun || quitted) return; await poll(); } while (S.life !== "running" || S.restarting);
+  if (await post("set", settings(p.auto)) && p.add) await post("add", { n: p.add });
+}
+for (const p of presets) { const b = el("button", "", p.name); b.title = p.text; b.onclick = () => runPreset(p); $("presets").append(b); }
+
+/* ---- live pool: state ---- */
+let S = null, lastSeq = 0, clock = 0, polling = null, selection = null, formLoaded = false;
+const tasks = new Map();   // id -> newest copy we have
+let finished = [];         // for the timeline
+let samples = [];          // {at, done, busy, fill}
+const waitsOn = () => S.config.backend
+  ? { producer: "sem_wait(empty_slots)", worker: "sem_wait(full_slots)" }
+  : { producer: "waiting on not_full", worker: "waiting on not_empty" };
+
+function poll() { return polling || (polling = pollOnce().finally(() => polling = null)); }
+async function pollOnce() {
+  let s;
+  try { s = await (await fetch("/api/state?since=" + lastSeq)).json(); }
+  catch { if (!quitted) { setText($("life"), "program not running"); setClass($("life"), "pill lost"); } return; }
+  if (s.seq < lastSeq || (S && s.now < S.now)) { // the program was restarted
+    lastSeq = 0; tasks.clear(); finished = []; samples = []; S = null;
+    return;
+  }
+  if (S && s.uptime < S.uptime && s.life !== "stopped") samples = []; // new pool
+  S = s; lastSeq = s.seq; clock = performance.now() - s.now;
+
+  if (!formLoaded) {
+    for (const k of ["workers", "capacity", "producers", "backend"]) $(k).value = s.config[k];
+    for (const k of ["cpu", "ms", "try", "rate"]) $(k).value = s.settings[k];
+    formLoaded = true;
+  }
+  for (const t of s.queue) tasks.set(t.id, t);
+  for (const w of s.workers) if (w.task) tasks.set(w.task.id, w.task);
+  for (const e of s.events) {
+    if (e.type === "done") { tasks.set(e.task.id, e.task); finished.push(e.task); }
+    if (e.type === "rejected") tasks.set(e.task.id, { ...e.task, rejected: true });
+  }
+  for (const id of tasks.keys()) { if (tasks.size <= 3000) break; tasks.delete(id); }
+  finished = finished.filter(t => t.ended > s.now - 11000);
+  samples.push({ at: s.now, done: s.done, busy: s.workers.reduce((a, w) => a + w.busy, 0), fill: s.queue.length / s.config.capacity });
+  samples = samples.filter(x => x.at > s.now - 11000);
+  renderLive();
+  renderLog();
+}
+
+/* Keep exactly n children so that clicks and focus survive updates. */
+function sync(box, n, make) {
+  while (box.children.length > n) box.lastChild.remove();
+  while (box.children.length < n) box.append(make(box.children.length));
+}
+const select = s => { selection = s; renderLive(); };
+const isSel = (type, id) => selection && selection.type === type && selection.id === id;
+
+function renderLive() {
+  if (!S) return;
+  const w = waitsOn(), running = S.life === "running";
+  const name = { running: "running", stopped: "stopped", stopping: "stopping: joining producers", draining: "tp_destroy: draining queue" }[S.life];
+  setText($("life"), S.reserved ? "benchmark running" : S.waiting ? name + ", tp_wait blocked" : name);
+  setClass($("life"), "pill " + S.life);
+
+  const off = !running || S.reserved;
+  for (const b of document.querySelectorAll("[data-add]")) b.disabled = off;
+  $("auto").disabled = off; $("pause").disabled = !running; $("wait").disabled = !running || !!S.waiting;
+  $("shutdown").disabled = !running;
+  $("auto").setAttribute("aria-pressed", !!S.settings.auto);
+  setText($("auto"), S.settings.auto ? "Stop submitting" : "Submit continuously");
+  $("pause").setAttribute("aria-pressed", !!S.paused);
+  setText($("pause"), S.paused ? "Resume workers" : "Pause workers");
+  setText($("wait"), S.waiting ? "tp_wait…" : "tp_wait");
+  setText($("restart"), S.life === "stopped" ? "Start" : "Restart with this setup");
+
+  const gone = S.life === "stopped" || S.life === "draining";
+  setText($("toSubmit"), S.to_submit ? `(${S.to_submit} still to submit)` : "");
+  sync($("plist"), S.producers.length, i => {
+    const b = el("button"); b.append(el("b"), el("small")); b.onclick = () => select({ type: "producer", id: i }); return b;
+  });
+  S.producers.forEach((p, i) => {
+    const b = $("plist").children[i], blocked = p.state === "blocked";
+    setClass(b, "box" + (blocked ? " blocked" : "") + (isSel("producer", i) ? " selected" : ""));
+    setText(b.children[0], `P${i} ${gone ? "joined" : blocked ? "⛔ blocked" : p.state}`);
+    setText(b.children[1], blocked ? `#${p.task}: ${w.producer}, ${ms(p.for)}` : `${p.submitted} submitted`);
+  });
+
+  const cap = S.config.capacity, n = S.queue.length, tail = (S.head + n) % cap;
+  setText($("qcount"), `(${n} of ${cap}${n === cap ? ", full" : n ? "" : ", empty"})`);
+  sync($("qlist"), cap, i => {
+    const b = el("button"); b.append(el("em"), el("b"), el("small"));
+    b.onclick = () => { const t = slotTask(i); if (t) select({ type: "task", id: t.id }); };
+    return b;
+  });
+  for (let i = 0; i < cap; i++) {
+    const b = $("qlist").children[i], t = slotTask(i);
+    setClass(b, "slot" + (t ? " full" : "") + (t && isSel("task", t.id) ? " selected" : ""));
+    setText(b.children[0], (i === S.head ? "HEAD " : "") + (i === tail ? "TAIL" : ""));
+    setText(b.children[1], t ? "#" + t.id : "");
+    setText(b.children[2], "[" + i + "]");
+    b.tabIndex = t ? 0 : -1;
+    b.setAttribute("aria-label", `slot ${i}: ${t ? "task " + t.id : "empty"}`);
+  }
+
+  const nrun = S.workers.filter(x => x.state === "running").length;
+  setText($("wcount"), `(${nrun} of ${S.workers.length} running)`);
+  setClass($("wlist"), "list" + (S.workers.length > 6 ? " two" : ""));
+  sync($("wlist"), S.workers.length, i => {
+    const b = el("button"), bar = el("div", "bar"); bar.append(el("i"));
+    b.append(el("b"), el("small"), bar); b.onclick = () => select({ type: "worker", id: i }); return b;
+  });
+  S.workers.forEach((x, i) => {
+    const b = $("wlist").children[i], t = x.task;
+    setClass(b, "box" + ({ running: " busy", held: " held" }[x.state] || "") + (isSel("worker", i) ? " selected" : ""));
+    setText(b.children[0], `W${i} ` + (S.life === "stopped" ? "joined" : x.state === "running" ? "▶ #" + t.id : x.state === "held" ? "⏸ holds #" + t.id : "idle"));
+    setText(b.children[1], S.life === "stopped" ? `${x.done} done` : x.state === "running" ? `${t.cpu ? "computing" : "sleeping"} ${ms(S.now - t.started)} / ~${t.ms} ms` : x.state === "held" ? "paused" : w.worker);
+    b.children[2].firstChild.style.width = x.state === "running" ? Math.min(100, (S.now - t.started) / t.ms * 100) + "%" : "0";
+  });
+
+  const first = samples.find(x => x.at >= S.now - 2000) || samples[0], last = samples[samples.length - 1];
+  const dt = last && first ? last.at - first.at : 0;
+  const tiles = [
+    ["Requested", S.requested], ["In queue", n], ["Running", nrun], ["Done", S.done],
+    ["Rejected", S.rejected], ["Cancelled", S.cancelled],
+    ["Avg. until start", ms(S.avg_wait)], ["Avg. run time", ms(S.avg_run)],
+    ["Tasks per second", dt > 500 ? ((last.done - first.done) / dt * 1000).toFixed(1) : "–"],
+    ["Workers busy", dt > 500 ? Math.min(100, (last.busy - first.busy) / dt / S.workers.length * 100).toFixed(0) + "%" : "–"],
+  ];
+  sync($("tiles"), tiles.length, () => { const d = el("div", "tile"); d.append(el("span"), el("b")); return d; });
+  tiles.forEach(([k, v], i) => { const d = $("tiles").children[i]; setText(d.children[0], k); setText(d.children[1], String(v)); });
+
+  renderDetails();
+}
+function slotTask(i) {
+  const cap = S.config.capacity;
+  return S.queue[(i - S.head + cap) % cap];
+}
+
+function logLine(e) {
+  const t = e.task;
+  return { done: `✓ #${t.id} done on W${t.worker}: ran ${ms(t.ended - t.started)}, started ${ms(t.started - t.created)} after submit`,
+    rejected: `✗ #${t.id} rejected: queue full (TP_FULL) for P${t.producer}`,
+    blocked: `⛔ P${t.producer} was blocked ${ms(e.ms)} submitting #${t.id}`,
+    note: "• " + e.text }[e.type];
+}
+function renderLog() {
+  const log = $("log"), stick = log.scrollTop < 5;
+  for (const e of S.events.slice(-60)) {
+    const d = el("div"); d.append(el("time", "", (e.at / 1000).toFixed(2) + " s"), el("span", "", logLine(e)));
+    log.prepend(d);
+  }
+  while (log.children.length > 200) log.lastChild.remove();
+  if (stick) log.scrollTop = 0;
+}
+
+function renderDetails() {
+  let title = "", rows = [];
+  if (!selection) {
+    title = "Click a producer, a queued task, a worker or a task in the timeline.";
+  } else if (selection.type === "task") {
+    const t = tasks.get(selection.id);
+    title = "Task #" + selection.id;
+    if (t) {
+      const state = t.rejected ? "rejected (TP_FULL)" : t.ended ? "done" : t.started ? "running" : t.worker >= 0 ? "held by a paused worker" : "in the queue";
+      rows = [["State", state], ["Kind", `${t.cpu ? "CPU arithmetic" : "sleep"}, ${t.ms} ms requested`], ["Submitted by", "P" + t.producer], ["Ran on", t.worker >= 0 ? "W" + t.worker : "–"]];
+      if (!t.rejected) rows.push(
+        ["Submit call", t.queued ? ms(Math.max(0, t.queued - t.created)) : "–"],
+        ["Waited in queue", t.queued ? ms(Math.max(0, (t.started || S.now) - t.queued)) : "–"],
+        ["Run time", t.started ? ms((t.ended || S.now) - t.started) : "–"]);
+    } else rows = [["State", "no longer remembered"]];
+  } else if (selection.type === "worker") {
+    const x = S.workers[selection.id];
+    title = "Worker W" + selection.id;
+    rows = x ? [["State", S.life === "stopped" ? "joined" : x.state === "idle" ? "idle: " + waitsOn().worker : x.state], ["Current task", x.task ? "#" + x.task.id : "–"], ["Tasks done", x.done], ["Time in tasks", ms(x.busy)], ["Busy since start", S.uptime ? (x.busy / S.uptime * 100).toFixed(1) + "%" : "–"]] : [["State", "does not exist in this pool"]];
+  } else {
+    const p = S.producers[selection.id];
+    title = "Producer P" + selection.id;
+    rows = p ? [["State", p.state === "blocked" ? "blocked: " + waitsOn().producer : p.state], ["Last task", p.task ? "#" + p.task : "–"], ["Submitted", p.submitted], ["Blocked for", p.state === "blocked" ? ms(p.for) : "–"]] : [["State", "does not exist in this pool"]];
+  }
+  const key = title + JSON.stringify(rows);
+  if (renderDetails.key === key) return;
+  renderDetails.key = key;
+  const dl = el("dl");
+  for (const [k, v] of rows) dl.append(el("dt", "", k), el("dd", "", String(v)));
+  $("detailBody").replaceChildren(el(selection ? "b" : "span", selection ? "" : "hint", title), dl);
+}
+
+/* ---- timeline ---- */
+const SPAN = 10000, LEFT = 46, ROWMAX = 22, FILLH = 46;
+let hits = [];
+function drawGantt() {
+  if (quitted) return;
+  requestAnimationFrame(drawGantt);
+  const c = $("gantt");
+  if (!S || $("live").hidden) return;
+  const n = S.workers.length, rowH = n > 8 ? 15 : ROWMAX, W = c.clientWidth, H = n * rowH + FILLH + 30, k = devicePixelRatio || 1;
+  if (c.width !== Math.round(W * k) || c.height !== Math.round(H * k)) { c.width = Math.round(W * k); c.height = Math.round(H * k); c.style.height = H + "px"; }
+  const g = c.getContext("2d");
+  g.setTransform(k, 0, 0, k, 0, 0);
+  g.clearRect(0, 0, W, H);
+  // Show time slightly late, so that what we draw has already been reported.
+  const now = performance.now() - clock - 120, x = t => LEFT + (t - now + SPAN) / SPAN * (W - LEFT - 4);
+  const grid = css("--grid"), ink = css("--ink2"), blue = css("--s1"), aqua = css("--s3"), orange = css("--s2");
+  g.font = "12px system-ui, sans-serif"; g.textBaseline = "middle"; g.lineWidth = 1;
+  const bottom = n * rowH + 8 + FILLH;
+  g.textAlign = "center";
+  for (let s = 0; s <= 10; s += 2) {
+    const px = LEFT + s / 10 * (W - LEFT - 4);
+    g.strokeStyle = grid; g.beginPath(); g.moveTo(px, 0); g.lineTo(px, bottom); g.stroke();
+    g.fillStyle = ink; g.textAlign = s === 10 ? "right" : "center"; g.fillText(s === 10 ? "now" : s - 10 + " s", px, bottom + 11);
+  }
+  g.textAlign = "left";
+  for (let i = 0; i < n; i++) { g.fillStyle = ink; g.fillText("W" + i, 4, i * rowH + rowH / 2); }
+  hits = [];
+  g.save(); g.beginPath(); g.rect(LEFT, 0, W - LEFT - 4, bottom); g.clip();
+  const bar = t => {
+    const a = Math.max(LEFT, x(t.started)), b = Math.min(W - 4, x(t.ended || now));
+    if (b <= a || t.worker >= n) return;
+    const y = t.worker * rowH + 2, h = rowH - 4, w = Math.max(1, b - a - 2); // 2 px gap between neighbours
+    g.fillStyle = t.cpu ? blue : aqua;
+    g.beginPath(); g.roundRect(a, y, w, h, Math.min(3, w / 2)); g.fill();
+    if (selection && selection.type === "task" && selection.id === t.id) { g.strokeStyle = css("--ink"); g.lineWidth = 2; g.stroke(); g.lineWidth = 1; }
+    const label = "#" + t.id;
+    if (w > g.measureText(label).width + 10) { g.fillStyle = "#fff"; g.fillText(label, a + 5, y + h / 2 + .5); }
+    hits.push({ a, b, y, h, t });
+  };
+  finished.forEach(bar);
+  for (const w of S.workers) if (w.state === "running" && w.task) bar(w.task);
+  // queue fill, 0 to 100 %
+  const base = bottom, top = bottom - FILLH + 8;
+  const pts = samples.map(s => [x(s.at), base - s.fill * (base - top)]);
+  if (pts.length > 1) {
+    g.beginPath(); pts.forEach(([px, py], i) => i ? g.lineTo(px, py) : g.moveTo(px, py));
+    g.strokeStyle = orange; g.lineWidth = 2; g.lineJoin = "round"; g.stroke();
+    g.lineTo(pts[pts.length - 1][0], base); g.lineTo(pts[0][0], base); g.closePath();
+    g.globalAlpha = .12; g.fillStyle = orange; g.fill(); g.globalAlpha = 1;
+  }
+  g.restore();
+  g.strokeStyle = css("--axis"); g.lineWidth = 1; g.beginPath(); g.moveTo(LEFT, base + .5); g.lineTo(W - 4, base + .5); g.stroke();
+  g.fillStyle = ink; g.fillText("100%", 4, top); g.fillText("queue", 4, (top + base) / 2 + 2); g.fillText("0%", 4, base - 2);
+}
+const hitAt = e => { const r = $("gantt").getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top; return hits.find(h => px >= h.a - 2 && px <= h.b + 2 && py >= h.y - 2 && py <= h.y + h.h + 2); };
+$("gantt").onclick = e => { const h = hitAt(e); if (h) select({ type: "task", id: h.t.id }); };
+$("gantt").onmousemove = e => { const h = hitAt(e); e.target.style.cursor = h ? "pointer" : ""; tip(e, h && `#${h.t.id} on W${h.t.worker}, from P${h.t.producer}\n${h.t.ended ? "ran " + ms(h.t.ended - h.t.started) : "running"}`); };
+$("gantt").onmouseleave = e => tip(e, null);
+
+/* ---- benchmark race ---- */
+const STRAT = [["Sequential", "one thread does everything", "--s3"], ["Thread per task", "pthread_create for every task", "--s2"], ["Thread pool", "this library", "--s1"]];
+for (const [n, d] of STRAT) {
+  const l = el("div"); l.append(el("b", "", n), el("br"), el("small", "", d));
+  const t = el("div", "track"); t.append(el("i"), el("span"));
+  $("rBars").append(l, t);
+}
+function drawRace(b) {
+  const v = STRAT.map((_, i) => i < b.stage ? b.seconds[i] : i === b.stage && b.running ? b.elapsed : null);
+  const max = Math.max(...v.map(x => x || 0), 1e-6);
+  STRAT.forEach((s, i) => {
+    const t = $("rBars").children[i * 2 + 1], bar = t.children[0];
+    bar.style.background = `var(${s[2]})`; bar.style.width = v[i] === null ? "0" : v[i] / max * 75 + "%";
+    bar.style.visibility = v[i] === null ? "hidden" : "visible";
+    const done = i < b.stage;
+    t.children[1].textContent = v[i] === null ? (b.running ? "waiting" : "") : ms(v[i] * 1000) + (done ? i && b.seconds[0] > 0 ? `  (${ratio(b.seconds[0], b.seconds[i])} sequential)` : "" : " …");
+  });
+}
+const ratio = (a, b) => b <= 0 || a <= 0 ? "–" : a >= b ? (a / b).toFixed(1) + "x faster than" : (b / a).toFixed(1) + "x slower than";
+let racing = false;
+async function race() {
+  const p = { tasks: num("rTasks"), us: num("rUs"), workers: num("rWorkers") };
+  if (racing || Object.values(p).includes(null) || !await post("bench", p)) return;
+  racing = true; $("rRun").disabled = true; $("rVerdict").textContent = "";
+  let b;
+  do {
+    await sleep(60);
+    try { b = await (await fetch("/api/bench")).json(); drawRace(b); } catch { b = null; break; }
+  } while (b.running);
+  racing = false; $("rRun").disabled = false;
+  if (!b) { toast("The dashboard program is not running."); return; }
+  const [s, t, q] = b.seconds, best = b.seconds.indexOf(Math.min(...b.seconds));
+  $("rVerdict").textContent = `${STRAT[best][0]} was fastest. The pool was ${ratio(s, q)} sequential and ${ratio(t, q)} one thread per task.`;
+  const tr = el("tr");
+  for (const c of [`${b.tasks.toLocaleString("en")} × ${b.us} µs, ${b.workers} workers`, ms(s * 1000), ms(t * 1000), ms(q * 1000), ratio(s, q).replace(" than", ""), ratio(t, q).replace(" than", "")]) tr.append(el("td", "", c));
+  $("rHistory").prepend(tr);
+}
+$("rRun").onclick = race;
+$("rWorkers").value = Math.min(64, navigator.hardwareConcurrency || 12);
+for (const b of document.querySelectorAll("[data-race]")) b.onclick = () => { [$("rTasks").value, $("rUs").value] = b.dataset.race.split(","); race(); };
+
+/* ---- saved results ---- */
+const NS = "http://www.w3.org/2000/svg";
+function svg(parent, tag, attrs, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  parent.append(e); return e;
+}
+function hover(e, text) { e.addEventListener("mousemove", ev => tip(ev, text)); e.addEventListener("mouseleave", ev => tip(ev, null)); }
+function card(title, finding, legend, head, rows) {
+  const c = el("div", "card"); c.append(el("h3", "", title), el("p", "hint", finding));
+  if (legend) { const l = el("div"); for (const [n, col] of legend) { const k = el("span", "key"), i = el("i"); i.style.background = `var(${col})`; k.append(i, n); l.append(k); } c.append(l); }
+  const s = svg(c, "svg", { viewBox: "0 0 600 300", role: "img", "aria-label": title + ". " + finding });
+  const d = el("details"), t = el("table"), tr = el("tr");
+  for (const h of head) tr.append(el("th", "", h));
+  t.append(tr);
+  for (const r of rows) { const x = el("tr"); for (const v of r) x.append(el("td", "", v)); t.append(x); }
+  d.append(el("summary", "", "Show table"), t); c.append(d);
+  $("charts").append(c);
+  return s;
+}
+const X0 = 56, X1 = 570, Y0 = 250, Y1 = 18;
+function axes(s, ticks, y, fmt, xTitle) {
+  for (const t of ticks) {
+    svg(s, "line", { x1: X0, x2: X1, y1: y(t), y2: y(t), stroke: "var(--grid)" });
+    svg(s, "text", { x: X0 - 8, y: y(t) + 4, "text-anchor": "end" }, fmt(t));
+  }
+  svg(s, "line", { x1: X0, x2: X1, y1: Y0, y2: Y0, stroke: "var(--axis)" });
+  svg(s, "text", { x: (X0 + X1) / 2, y: Y0 + 40, "text-anchor": "middle" }, xTitle);
+}
+function line(s, pts, color, label) { // pts: [x, y, tooltip]
+  svg(s, "polyline", { points: pts.map(p => p[0] + "," + p[1]).join(" "), fill: "none", stroke: `var(${color})`, "stroke-width": 2, "stroke-linejoin": "round" });
+  for (const p of pts) {
+    svg(s, "circle", { cx: p[0], cy: p[1], r: 5, fill: `var(${color})`, stroke: "var(--surface)", "stroke-width": 2 });
+    hover(svg(s, "circle", { cx: p[0], cy: p[1], r: 13, fill: "transparent" }), label + "\n" + p[2]);
+  }
+}
+let savedDrawn = false;
+async function drawSaved() {
+  if (savedDrawn) return;
+  savedDrawn = true;
+  let text;
+  try { const r = await fetch("/results/bench.csv"); if (!r.ok) throw 0; text = await r.text(); }
+  catch { savedDrawn = false; $("charts").replaceChildren(el("p", "", "results/bench.csv was not found. Create it with: make bench")); return; }
+  const runs = new Map();
+  for (const l of text.trim().split(/\r?\n/).slice(1)) {
+    const [exp, strat, param, threads, n, , sec] = l.split(","), key = [exp, strat, param, threads].join();
+    if (!runs.has(key)) runs.set(key, { exp, strat, param: +param, threads: +threads, n: +n, v: [] });
+    runs.get(key).v.push(+sec);
+  }
+  const all = [...runs.values()];
+  for (const r of all) { const v = r.v.sort((a, b) => a - b), m = v.length >> 1; r.sec = v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; }
+  const of = (exp, strat) => all.filter(r => r.exp === exp && (!strat || r.strat === strat));
+  $("charts").replaceChildren();
+  const draw = [granularity, poolSize, io, queue];
+  for (const f of draw) try { f(of); } catch { $("charts").append(el("p", "hint", "One experiment is missing from results/bench.csv.")); }
+}
+const NAMES = { sequential: ["Sequential", "--s3"], thread_per_task: ["Thread per task", "--s2"], pool: ["Pool", "--s1"] };
+function granularity(of) {
+  const keys = ["sequential", "thread_per_task", "pool"], xs = of("granularity", "pool").map(r => r.param).sort((a, b) => a - b);
+  const get = (k, p) => of("granularity", k).find(r => r.param === p), per = r => r.sec / r.n * 1e6;
+  const gains = xs.map(p => get("thread_per_task", p).sec / get("pool", p).sec), lo = Math.min(...gains), hi = Math.max(...gains);
+  const s = card("Cost per task, by task size", `The pool was ${lo.toFixed(1)}x to ${hi.toFixed(0)}x faster than one thread per task. The vertical axis is logarithmic; lower is better.`,
+    keys.map(k => NAMES[k]), ["Work per task", ...keys.map(k => NAMES[k][0])], xs.map(p => [p + " µs", ...keys.map(k => per(get(k, p)).toFixed(2) + " µs")]));
+  const x = p => X0 + 40 + xs.indexOf(p) / (xs.length - 1) * (X1 - X0 - 80), y = v => Y0 - (Math.log10(v) + .3) / 3.5 * (Y0 - Y1);
+  axes(s, [1, 10, 100, 1000], y, v => v.toLocaleString("en"), "work per task, µs (vertical axis: µs of elapsed time per task)");
+  for (const p of xs) svg(s, "text", { x: x(p), y: Y0 + 18, "text-anchor": "middle" }, p);
+  for (const k of keys) line(s, xs.map(p => get(k, p)).filter(r => per(r) >= .5).map(r => [x(r.param), y(per(r)), `${r.param} µs tasks: ${per(r).toFixed(2)} µs each`]), NAMES[k][1], NAMES[k][0]);
+}
+function poolSize(of) {
+  const seq = of("pool_size", "sequential")[0].sec, rs = of("pool_size", "pool").sort((a, b) => a.threads - b.threads);
+  const best = rs.reduce((a, b) => b.sec < a.sec ? b : a), max = rs[rs.length - 1].threads;
+  const s = card("Speedup by number of workers", `Best: ${(seq / best.sec).toFixed(1)}x with ${best.threads} workers. Beyond the hardware threads, more workers do not help.`,
+    null, ["Workers", "Time", "Speedup"], rs.map(r => [r.threads, ms(r.sec * 1000), (seq / r.sec).toFixed(2) + "x"]));
+  const top = Math.ceil(seq / best.sec / 2) * 2 + 2, x = t => X0 + t / max * (X1 - X0 - 20), y = v => Y0 - v / top * (Y0 - Y1);
+  axes(s, Array.from({ length: top / 2 + 1 }, (_, i) => i * 2), y, v => v + "x", "workers");
+  for (const r of rs) svg(s, "text", { x: x(r.threads), y: Y0 + 18, "text-anchor": "middle" }, r.threads);
+  const lim = Math.min(max, top);
+  svg(s, "line", { x1: x(0), y1: y(0), x2: x(lim), y2: y(lim), stroke: "var(--muted)", "stroke-width": 1.5 });
+  svg(s, "text", { x: x(lim) + 8, y: y(lim) + 10 }, "ideal");
+  line(s, rs.map(r => [x(r.threads), y(seq / r.sec), `${r.threads} workers: ${(seq / r.sec).toFixed(2)}x`]), "--s1", "Pool");
+}
+function io(of) {
+  const rs = of("io").map(r => ({ name: r.strat === "pool" ? `Pool, ${r.threads} workers` : `Thread per task (${r.n})`, color: NAMES[r.strat][1], sec: r.sec, n: r.n })).sort((a, b) => b.sec - a.sec);
+  const s = card(`${rs[0].n} sleeping tasks (simulated I/O)`, `${rs[rs.length - 1].name} was fastest. A sleeping task holds its worker, so size the pool by how many tasks should wait at once. Lower is better.`,
+    [NAMES.pool, NAMES.thread_per_task], ["Strategy", "Time"], rs.map(r => [r.name, ms(r.sec * 1000)]));
+  const x0 = 150, w = v => v / rs[0].sec * 360;
+  svg(s, "line", { x1: x0, x2: x0, y1: 20, y2: 260, stroke: "var(--axis)" });
+  rs.forEach((r, i) => {
+    const y = 40 + i * 58;
+    svg(s, "text", { x: x0 - 10, y: y + 16, "text-anchor": "end" }, r.name);
+    const b = Math.max(6, w(r.sec));
+    hover(svg(s, "path", { d: `M${x0} ${y}h${b - 4}q4 0 4 4v16q0 4-4 4h${4 - b}z`, fill: `var(${r.color})` }), r.name + "\n" + ms(r.sec * 1000));
+    svg(s, "text", { x: x0 + b + 8, y: y + 16, class: "v" }, ms(r.sec * 1000));
+  });
+}
+function queue(of) {
+  const kinds = [["condvar", "Condition variables", "--s1"], ["semaphore", "Semaphores", "--s2"]];
+  const groups = of("queue", "condvar").sort((a, b) => a.param - b.param || a.threads - b.threads);
+  const rate = (k, g) => { const r = of("queue", k).find(r => r.param === g.param && r.threads === g.threads); return r.n / r.sec / 1e6; };
+  const s = card("Queue throughput: condition variables vs semaphores", "Million items per second, higher is better. Capacity matters far more than the kind of waiting.",
+    kinds.map(k => [k[1], k[2]]), ["Capacity, producers + consumers", "Condvar", "Semaphore"], groups.map(g => [`${g.param}, ${g.threads} + ${g.threads}`, ...kinds.map(k => rate(k[0], g).toFixed(2))]));
+  const max = Math.max(...groups.flatMap(g => kinds.map(k => rate(k[0], g)))), top = Math.ceil(max / 2) * 2, y = v => Y0 - v / top * (Y0 - Y1);
+  axes(s, Array.from({ length: top / 2 + 1 }, (_, i) => i * 2), y, v => v, "");
+  const caps = [...new Set(groups.map(g => g.param))], step = (X1 - X0) / groups.length;
+  groups.forEach((g, i) => {
+    const cx = X0 + (i + .5) * step;
+    svg(s, "text", { x: cx, y: Y0 + 17, "text-anchor": "middle" }, `${g.threads}+${g.threads}`);
+    kinds.forEach((k, j) => {
+      const v = rate(k[0], g), h = Math.max(2, Y0 - y(v)), w = 18, x = cx + (j ? 1 : -w - 1), r = Math.min(4, h);
+      hover(svg(s, "path", { d: `M${x} ${Y0}v${r - h}q0 ${-r} ${r} ${-r}h${w - 2 * r}q${r} 0 ${r} ${r}v${h - r}z`, fill: `var(${k[2]})` }), `${k[1]}, capacity ${g.param}, ${g.threads} + ${g.threads}\n${v.toFixed(2)} million items/s`);
+    });
+  });
+  caps.forEach((c, i) => svg(s, "text", { x: X0 + (i + .5) * (X1 - X0) / caps.length, y: Y0 + 38, "text-anchor": "middle", class: "v" }, "capacity " + c));
+}
+
+/* ---- tests ---- */
+$("tRun").onclick = async () => {
+  if (!await post("tests")) return;
+  $("tRun").disabled = true; $("tlist").replaceChildren();
+  setText($("tBadge"), "running…"); setClass($("tBadge"), "pill stopping");
+  let r;
+  do {
+    await sleep(250);
+    try { r = await (await fetch("/api/tests")).json(); const log = await fetch("/api/test.log"); if (log.ok) showTests(await log.text()); }
+    catch { r = null; break; }
+  } while (r.running);
+  $("tRun").disabled = false;
+  if (!r) { toast("The dashboard program is not running."); return; }
+  const pass = r.exit_code === 0, summary = [...$("tlist").children].map(x => x.textContent).find(x => /^\d+ tests/.test(x));
+  setText($("tBadge"), (pass ? "✓ passed" : "✗ failed") + (summary ? ": " + summary : " (exit status " + r.exit_code + ")"));
+  setClass($("tBadge"), "pill " + (pass ? "" : "lost"));
+};
+function showTests(text) {
+  const items = text.split(/\r?\n/).filter(l => l.trim()).map(l =>
+    l.startsWith("ok ") ? el("li", "ok", l.slice(5)) : l.startsWith("FAIL ") ? el("li", "no", l.slice(5)) : el("li", "", l));
+  $("tlist").replaceChildren(...items);
+}
+
+/* ---- go ---- */
+show("live");
+(async () => { while (!quitted) { await poll(); await sleep(100); } })();
+requestAnimationFrame(drawGantt);
+</script>
+</body>
+</html>

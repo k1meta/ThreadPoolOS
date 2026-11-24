@@ -2,6 +2,7 @@
 #include "bqueue.h"
 
 #include <pthread.h>
+#include <stdint.h>
 #include <stdlib.h>
 
 typedef struct {
@@ -52,7 +53,8 @@ static void shut_down(threadpool *tp, size_t started)
     free(tp);
 }
 
-threadpool *tp_create(size_t nthreads, size_t queue_capacity)
+threadpool *tp_create_with(size_t nthreads, size_t queue_capacity,
+                           bq_backend backend)
 {
     if (nthreads == 0 || queue_capacity == 0)
         return NULL;
@@ -63,7 +65,7 @@ threadpool *tp_create(size_t nthreads, size_t queue_capacity)
     tp->threads = calloc(nthreads, sizeof *tp->threads);
     if (!tp->threads)
         goto fail_threads;
-    tp->queue = bq_create(queue_capacity, sizeof(task), BQ_CONDVAR);
+    tp->queue = bq_create(queue_capacity, sizeof(task), backend);
     if (!tp->queue)
         goto fail_queue;
     if (pthread_mutex_init(&tp->lock, NULL) != 0)
@@ -89,6 +91,11 @@ fail_queue:
 fail_threads:
     free(tp);
     return NULL;
+}
+
+threadpool *tp_create(size_t nthreads, size_t queue_capacity)
+{
+    return tp_create_with(nthreads, queue_capacity, BQ_CONDVAR);
 }
 
 static int submit(threadpool *tp, tp_task_fn fn, void *arg, int block)
@@ -130,6 +137,20 @@ void tp_wait(threadpool *tp)
     while (tp->pending > 0)
         pthread_cond_wait(&tp->all_done, &tp->lock);
     pthread_mutex_unlock(&tp->lock);
+}
+
+size_t tp_snapshot(threadpool *tp, void **args, size_t max, size_t *head)
+{
+    if (!tp || !args || max == 0 || max > SIZE_MAX / sizeof(task))
+        return 0;
+    task *tasks = malloc(max * sizeof *tasks);
+    if (!tasks)
+        return 0;
+    size_t n = bq_snapshot(tp->queue, tasks, max, head);
+    for (size_t i = 0; i < n; i++)
+        args[i] = tasks[i].arg;
+    free(tasks);
+    return n;
 }
 
 void tp_destroy(threadpool *tp)

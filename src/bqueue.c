@@ -217,6 +217,25 @@ int bq_pop(bqueue *q, void *out) { return pop(q, out, 1); }
 int bq_try_push(bqueue *q, const void *item) { return push(q, item, 0); }
 int bq_try_pop(bqueue *q, void *out) { return pop(q, out, 0); }
 
+size_t bq_snapshot(bqueue *q, void *out, size_t max, size_t *head)
+{
+    if (!q || (!out && max > 0))
+        return 0;
+
+    unsigned char *dst = out;
+    pthread_mutex_lock(&q->lock);
+    size_t n = q->count < max ? q->count : max;
+    size_t to_end = q->capacity - q->head;
+    for (size_t i = 0; i < n; i++) {
+        size_t slot = i < to_end ? q->head + i : i - to_end;
+        memcpy(dst + i * q->item_size, q->buf + slot * q->item_size, q->item_size);
+    }
+    if (head)
+        *head = q->head;
+    pthread_mutex_unlock(&q->lock);
+    return n;
+}
+
 void bq_close(bqueue *q)
 {
     if (!q)
